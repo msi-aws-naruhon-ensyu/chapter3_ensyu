@@ -1,0 +1,2 @@
+# chapter3_ensyu
+AWSなる本Chapter3の演習サンプル配布用リポジトリです。
