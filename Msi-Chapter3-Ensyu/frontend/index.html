@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <title>サーバレス演習サイト</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- ここに API を固定したい場合だけ設定（例: https://xxx.execute-api.ap-northeast-1.amazonaws.com/items またはベースURL） -->
-  <meta name="api-url" content="">
+  <!-- ここに API を固定したい場合だけ設定（例: https://xxx.execute-api.ap-northeast-1.amazonaws.com/Items またはベースURL） -->
+  <meta name="api-url" content="<演習3で控えたapiUrl>/Items">
   <style>
     :root { --gap: 8px; --bd:#ccc; --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; }
     body { text-align:center; font-family: var(--font); margin: 16px; }
@@ -57,7 +57,7 @@
     function normalizeItemsUrl(u) {
       if (!u) return "";
       u = u.replace(/\/+$/, "");
-      return /\/items$/.test(u) ? u : (u + "/items");
+      return /\/Items$/.test(u) ? u : (u + "/Items");
     }
     function resolveApiUrl() {
       const u = new URL(location.href);
@@ -73,7 +73,7 @@
       ? `APIエンドポイント: ${apiUrl}`
       : "APIエンドポイント未設定です。URLに ?api=<Invoke URL> を付けるか、<meta name=\"api-url\"> に設定してください。";
 
-    // --- fetch ラッパ（10sタイムアウト、204/空レス対応、詳細エラー） ---
+    // --- fetch ラッパ ---
     async function request(url, options = {}) {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 10_000);
@@ -94,7 +94,7 @@
     const tbody = $("#table tbody");
     const form = $("#form");
 
-    // --- 描画（DOM APIで安全に構築） ---
+    // --- 描画 ---
     async function draw() {
       if (!apiUrl) return;
       try {
@@ -141,7 +141,7 @@
       }
     }
 
-    // --- 行操作（イベント委譲：編集↔保存／削除） ---
+    // --- 行操作（編集/保存/削除） ---
     tbody.addEventListener("click", async (ev) => {
       const btn = ev.target.closest("button");
       if (!btn) return;
