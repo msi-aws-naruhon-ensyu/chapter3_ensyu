@@ -7,13 +7,12 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 # --- Configuration & Clients -------------------------------------------------
-# Keep default behavior the same as the original: table name "Items".
-# Allow override by env var TABLE_NAME (non-breaking, optional).
+# Default table name is "Items"; can be overridden by env var TABLE_NAME.
 TABLE_NAME = os.getenv("TABLE_NAME", "Items")
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 
-# Configure structured logging (reused across invocations)
+# Configure logging once per execution environment
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO)
@@ -26,23 +25,20 @@ CORS_HEADERS = {
     "Content-Type": "application/json",
 }
 
-
 # --- Helpers -----------------------------------------------------------------
 def _response(status: int, body: Any = "") -> Dict[str, Any]:
     """Build an API Gateway compatible response with common CORS headers."""
     if isinstance(body, (dict, list)):
-        # ensure_ascii=False keeps Japanese messages readable
         body = json.dumps(body, ensure_ascii=False)
     elif body is None:
         body = ""
     return {"statusCode": status, "headers": CORS_HEADERS, "body": body}
 
-
 def _parse_event(event: Dict[str, Any]) -> Tuple[str, str, Optional[str], Dict[str, Any]]:
     """Extract method, path, id path parameter, and JSON body from the event.
 
-
-    Supports both REST and HTTP APIs (v1/v2) without changing the external behavior.
+    Supports both REST and HTTP APIs (v1/v2). Path handling accepts `/Items`
+    and also tolerates lowercase `/items` for safety.
     """
     # HTTP method (REST: httpMethod, HTTP API v2: requestContext.http.method)
     method = event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method") or ""
@@ -51,25 +47,23 @@ def _parse_event(event: Dict[str, Any]) -> Tuple[str, str, Optional[str], Dict[s
     # Path (REST: path, HTTP API v2: rawPath)
     path = event.get("path") or event.get("rawPath") or "/"
 
-    # Path parameter "id" (if provided as /items/{id} or in event.pathParameters.id)
+    # Path parameter "id" (if provided as /Items/{id} or in event.pathParameters.id)
     path_params = event.get("pathParameters") or {}
     item_id = path_params.get("id")
     if not item_id:
-        # Fallback: parse from path like /items/{id or nested}
+        # Fallback: parse from path like /Items/{id or nested}
         segments = [s for s in path.split("/") if s]
-        if len(segments) >= 2 and segments[0] == "items":
-            item_id = "/".join(segments[1:])  # support nested ids if needed
+        if len(segments) >= 2 and segments[0].lower() == "items":
+            item_id = "/".join(segments[1:])  # allow nested ids if needed
 
     # Body (JSON or empty object)
     raw_body = event.get("body") or "{}"
     try:
         body = json.loads(raw_body) if isinstance(raw_body, str) else (raw_body or {})
     except json.JSONDecodeError:
-        # Bad JSON request
         raise ValueError("Invalid JSON in request body")
 
     return method, path, item_id, body
-
 
 def _validate_item_payload(payload: Dict[str, Any]) -> Optional[str]:
     """Validate presence of required fields for POST and PUT operations."""
@@ -77,12 +71,10 @@ def _validate_item_payload(payload: Dict[str, Any]) -> Optional[str]:
     missing = [k for k in required if k not in payload]
     if missing:
         return f"必須項目不足: {', '.join(missing)}"
-    # Basic type checks (strings are expected in this simple sample)
     for k in required:
         if not isinstance(payload[k], str):
             return f"'{k}' は文字列である必要があります"
     return None
-
 
 # --- Lambda Handler ----------------------------------------------------------
 def lambda_handler(event, context):
@@ -91,7 +83,8 @@ def lambda_handler(event, context):
         logger.info("Request: method=%s path=%s id=%s body_keys=%s", method, path, item_id, list(body.keys()))
 
         if method == "OPTIONS":
-            # Preflight response
+            # For REST APIs when OPTIONS is integrated with Lambda.
+            # (HTTP API with CORS enabled auto-responds and won't hit Lambda)
             return _response(204, "")
 
         if method == "GET":
@@ -102,22 +95,22 @@ def lambda_handler(event, context):
                     if not item:
                         return _response(404, {"message": "not found"})
                     return _response(200, item)
-                except (ClientError, BotoCoreError) as e:
+                except (ClientError, BotoCoreError):
                     logger.exception("GET get_item failed")
                     return _response(500, {"message": "internal error"})
             else:
                 try:
-                    # Simple scan for demo; in production consider pagination / queries
+                    # Simple scan for demo; in production consider pagination/Query.
                     resp = table.scan()
                     items = resp.get("Items", [])
                     return _response(200, items)
-                except (ClientError, BotoCoreError) as e:
+                except (ClientError, BotoCoreError):
                     logger.exception("GET scan failed")
                     return _response(500, {"message": "internal error"})
 
         if method == "POST":
             if item_id:
-                # POST to /items should not include id in path
+                # POST to /Items should not include id in path
                 return _response(400, {"message": "POST ではパスに id を含めないでください"})
             err = _validate_item_payload(body)
             if err:
@@ -125,14 +118,13 @@ def lambda_handler(event, context):
             try:
                 table.put_item(Item=body)
                 return _response(201, {"message": "created"})
-            except (ClientError, BotoCoreError) as e:
+            except (ClientError, BotoCoreError):
                 logger.exception("POST put_item failed")
                 return _response(500, {"message": "internal error"})
 
         if method == "PUT":
             if not item_id:
                 return _response(400, {"message": "id が必要です"})
-            # Only description/date are updatable, keep parity with original
             try:
                 table.update_item(
                     Key={"id": item_id},
@@ -144,7 +136,7 @@ def lambda_handler(event, context):
                     },
                 )
                 return _response(200, {"message": "updated"})
-            except (ClientError, BotoCoreError) as e:
+            except (ClientError, BotoCoreError):
                 logger.exception("PUT update_item failed")
                 return _response(500, {"message": "internal error"})
 
@@ -155,14 +147,13 @@ def lambda_handler(event, context):
             try:
                 table.delete_item(Key={"id": del_id})
                 return _response(200, {"message": "deleted"})
-            except (ClientError, BotoCoreError) as e:
+            except (ClientError, BotoCoreError):
                 logger.exception("DELETE delete_item failed")
                 return _response(500, {"message": "internal error"})
 
         return _response(405, {"message": "unsupported"})
 
     except ValueError as ve:
-        # e.g., invalid JSON
         logger.warning("Bad request: %s", ve)
         return _response(400, {"message": str(ve)})
     except Exception:
